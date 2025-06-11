@@ -297,6 +297,10 @@ BlockIO InterpreterCreateUserQuery::execute()
             }
         }
 
+        RolesOrUsersSet grantees_from_query;
+        if (query.grantees)
+            grantees_from_query = RolesOrUsersSet{*query.grantees, access_control};
+
         std::vector<UUID> ids;
         if (query.if_not_exists)
             ids = storage->tryInsert(new_users);
@@ -305,9 +309,8 @@ BlockIO InterpreterCreateUserQuery::execute()
         else
             ids = storage->insert(new_users);
 
-        if (query.grantees)
+        if (!grantees_from_query.empty())
         {
-            RolesOrUsersSet grantees_from_query = RolesOrUsersSet{*query.grantees, access_control};
             access_control.update(ids, [&](const AccessEntityPtr & entity, const UUID &) -> AccessEntityPtr
             {
                 auto updated_user = typeid_cast<std::shared_ptr<User>>(entity->clone());
