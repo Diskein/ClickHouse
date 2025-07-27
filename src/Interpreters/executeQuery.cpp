@@ -18,6 +18,7 @@
 #include <IO/LimitReadBuffer.h>
 #include <IO/copyData.h>
 
+#include <Parsers/ASTSetQuery.h>
 #include <QueryPipeline/BlockIO.h>
 #include <Processors/Transforms/getSourceFromASTInsertQuery.h>
 #include <Processors/Formats/Impl/NullFormat.h>
@@ -169,6 +170,7 @@ namespace Setting
     extern const SettingsBool apply_mutations_on_fly;
     extern const SettingsFloat min_os_cpu_wait_time_ratio_to_throw;
     extern const SettingsFloat max_os_cpu_wait_time_ratio_to_throw;
+    extern const SettingsMap additional_table_filters;
 }
 
 namespace ServerSetting
@@ -1141,9 +1143,61 @@ static BlockIO executeQueryImpl(
             }
         }
 
+        /// Set additional_table_filters inside the query for parameters substitution if applicable
+        bool has_params_inside_additional_table_filters = false;
+        if (out_ast && !settings[Setting::additional_table_filters].value.empty() && context->hasQueryParameters())
+        {
+            for (const auto & additional_table_filter : settings[Setting::additional_table_filters].value)
+            {
+                const auto & tuple = additional_table_filter.safeGet<Tuple>();
+                const auto & filter = tuple.at(1).safeGet<String>();
+
+                if (!filter.contains('{'))
+                    continue;
+
+                has_params_inside_additional_table_filters = true;
+                break;
+            }
+
+            /// Propogate query's settings to query's AST for replacement of params with a visitor
+            /// if it is configured in session's settings instead of in SETTINGS section of a query
+            if (has_params_inside_additional_table_filters)
+            {
+                auto set_settings_to_select_query = [&settings](ASTPtr & ast)
+                {
+                    auto * select_query_ast = ast->as<ASTSelectQuery>();
+
+                    if (!select_query_ast)
+                        return;
+
+                    auto select_query_settings_ast = select_query_ast->settings();
+
+                    if (!select_query_settings_ast)
+                    {
+                        auto set_query_ast = std::make_shared<ASTSetQuery>();
+                        set_query_ast->is_standalone = false;
+                        set_query_ast->changes.setSetting("additional_table_filters", settings[Setting::additional_table_filters].value);
+                        select_query_ast->setExpression(ASTSelectQuery::Expression::SETTINGS, set_query_ast);
+                    }
+                    else
+                        select_query_settings_ast->as<ASTSetQuery &>().changes.setSetting(
+                            "additional_table_filters", settings[Setting::additional_table_filters].value);
+                };
+
+                /// TODO: replace with visitor (INSET INTO ... SELECT isn't supported here, maybe more)
+                /// Add additional_table_filters to select queries so query paramters can be replaced by visitor
+                /// in SETTINGS seiction along with other places in a query
+                if (out_ast->as<ASTSelectQuery>())
+                    set_settings_to_select_query(out_ast);
+                else if (auto * select_query_with_union_all = out_ast->as<ASTSelectWithUnionQuery>())
+                    for (auto & select_ast_from_union : select_query_with_union_all->list_of_selects->children)
+                        set_settings_to_select_query(select_ast_from_union);
+            }
+        }
+
         /// Replace ASTQueryParameter with ASTLiteral for prepared statements.
         /// Even if we don't have parameters in query_context, check that AST doesn't have unknown parameters
-        bool probably_has_params = find_first_symbols<'{'>(begin, end) != end;
+        bool probably_has_params = find_first_symbols<'{'>(begin, end) != end || has_params_inside_additional_table_filters;
         if (out_ast && !is_create_parameterized_view && probably_has_params)
         {
             ReplaceQueryParameterVisitor visitor(context->getQueryParameters());
