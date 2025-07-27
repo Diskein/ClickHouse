@@ -429,9 +429,7 @@ void RemoteQueryExecutor::sendQueryUnlocked(ClientInfo::QueryKind query_kind, As
         local_granted_roles.insert(local_granted_roles.end(), granted_roles.begin(), granted_roles.end());
     }
 
-    const auto & params = context->getQueryParameters();
-
-    connections->sendQuery(timeouts, query, query_id, stage, modified_client_info, true, local_granted_roles, params);
+    connections->sendQuery(timeouts, query, query_id, stage, modified_client_info, true, local_granted_roles);
 
     established = false;
     sent_query = true;

@@ -37,8 +37,7 @@ public:
         UInt64 stage,
         ClientInfo & client_info,
         bool with_pending_data,
-        const std::vector<String> & external_roles,
-        const NameToNameMap & query_parameters) override;
+        const std::vector<String> & external_roles) override;
 
     void sendQueryPlan(const QueryPlan & query_plan) override;
 

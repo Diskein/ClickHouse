@@ -1,7 +1,6 @@
 #pragma once
 
 #include <Client/Connection.h>
-#include <Core/Names.h>
 #include <Storages/MergeTree/RequestResponse.h>
 
 namespace DB
@@ -26,9 +25,7 @@ public:
         UInt64 stage,
         ClientInfo & client_info,
         bool with_pending_data,
-        const std::vector<String> & external_roles,
-        const NameToNameMap & query_parmeters)
-        = 0;
+        const std::vector<String> & external_roles) = 0;
 
     virtual void sendQueryPlan(const QueryPlan & query_plan) = 0;
 
