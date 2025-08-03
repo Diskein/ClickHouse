@@ -2,6 +2,7 @@
 #include <AggregateFunctions/AggregateFunctionFactory.h>
 #include <AggregateFunctions/Combinators/AggregateFunctionCombinatorFactory.h>
 #include <Core/Settings.h>
+#include <DataTypes/DataTypeCustomSimpleAggregateFunction.h>
 #include <DataTypes/DataTypeLowCardinality.h>
 #include <DataTypes/DataTypesNumber.h>
 #include <Functions/FunctionFactory.h>
@@ -212,6 +213,23 @@ AggregateFunctionPtr AggregateFunctionFactory::getImpl(
             return nullptr;
 
         const Settings * settings = query_context ? &query_context->getSettingsRef() : nullptr;
+
+        if (!argument_types.empty() && argument_types[0]->hasCustomName())
+        {
+            if (const auto * custom_aggregate_type
+                = dynamic_cast<const DataTypeCustomSimpleAggregateFunction *>(argument_types[0]->getCustomName()))
+            {
+                if (custom_aggregate_type->getFunctionName() != name)
+                {
+                    throw Exception(
+                        ErrorCodes::ILLEGAL_AGGREGATION,
+                        "{} type's aggregate function {} should match with aggregate function type {}",
+                        custom_aggregate_type->getName(),
+                        custom_aggregate_type->getFunctionName(),
+                        name);
+                }
+            }
+        }
         return found.creator(name, argument_types, parameters, settings);
     }
 
