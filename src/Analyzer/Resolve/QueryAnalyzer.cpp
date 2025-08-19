@@ -2837,6 +2837,7 @@ ProjectionNames QueryAnalyzer::resolveFunction(QueryTreeNodePtr & node, Identifi
     bool is_special_function_join_get = false;
     bool is_special_function_exists = false;
     bool is_special_function_if = false;
+    bool is_special_function_multi_if = false;
 
     if (!lambda_expression_untyped)
     {
@@ -2848,6 +2849,7 @@ ProjectionNames QueryAnalyzer::resolveFunction(QueryTreeNodePtr & node, Identifi
 
         is_special_function_exists = function_name_lowercase == "exists";
         is_special_function_if = function_name_lowercase == "if";
+        is_special_function_multi_if = function_name_lowercase == "multiif";
 
         /** Special handling for count and countState functions.
           *
@@ -2974,6 +2976,52 @@ ProjectionNames QueryAnalyzer::resolveFunction(QueryTreeNodePtr & node, Identifi
                     false /*allow_lambda_expression*/,
                     false /*allow_table_expression*/);
                 node = std::move(constant_if_result_node);
+                return result_projection_names;
+            }
+        }
+    }
+
+    if (is_special_function_multi_if && !function_node_ptr->getArguments().getNodes().empty())
+    {
+        checkFunctionNodeHasEmptyNullsAction(*function_node_ptr);
+
+        auto & multi_if_function_arguments = function_node_ptr->getArguments().getNodes();
+
+        if ((multi_if_function_arguments.size() % 2 != 0) && multi_if_function_arguments.size() >= 3)
+        {
+            bool condition_arguments_constants = true;
+            size_t condition_argument_index = 0;
+            size_t result_argument_index = 1;
+
+            for (; result_argument_index < multi_if_function_arguments.size(); condition_argument_index += 2, result_argument_index += 2)
+            {
+                auto condition_node = multi_if_function_arguments[condition_argument_index];
+
+                resolveExpressionNode(condition_node, scope, false /*allow_lambda_expression*/, false /*allow_table_expression*/);
+
+                auto constant_condition = tryExtractConstantFromConditionNode(condition_node);
+
+                if (!constant_condition.has_value())
+                {
+                    condition_arguments_constants = false;
+                    break;
+                }
+                else if (!*constant_condition)
+                    continue;
+
+                auto result_node = multi_if_function_arguments[result_argument_index];
+                auto result_projection_names
+                    = resolveExpressionNode(result_node, scope, false /*allow_lambda_expression*/, false /*allow_table_expression*/);
+                node = std::move(result_node);
+                return result_projection_names;
+            }
+
+            if (condition_arguments_constants)
+            {
+                auto result_node = multi_if_function_arguments.back();
+                auto result_projection_names
+                    = resolveExpressionNode(result_node, scope, false /*allow_lambda_expression*/, false /*allow_table_expression*/);
+                node = std::move(result_node);
                 return result_projection_names;
             }
         }
