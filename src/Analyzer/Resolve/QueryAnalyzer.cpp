@@ -2843,10 +2843,11 @@ ProjectionNames QueryAnalyzer::resolveFunction(QueryTreeNodePtr & node, Identifi
         is_special_function_in = isNameOfInFunction(function_name);
         is_special_function_dict_get = functionIsDictGet(function_name);
         is_special_function_join_get = functionIsJoinGet(function_name);
-        is_special_function_exists = function_name == "exists";
-        is_special_function_if = function_name == "if";
 
         auto function_name_lowercase = Poco::toLower(function_name);
+
+        is_special_function_exists = function_name_lowercase == "exists";
+        is_special_function_if = function_name_lowercase == "if";
 
         /** Special handling for count and countState functions.
           *
