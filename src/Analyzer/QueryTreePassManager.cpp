@@ -32,6 +32,7 @@
 #include <Analyzer/Passes/IfTransformStringsToEnumPass.h>
 #include <Analyzer/Passes/LogicalExpressionOptimizerPass.h>
 #include <Analyzer/Passes/MultiIfToIfPass.h>
+#include <Analyzer/Passes/MultiIfConstFolding.h>
 #include <Analyzer/Passes/NormalizeCountVariantsPass.h>
 #include <Analyzer/Passes/OptimizeDateOrDateTimeConverterWithPreimagePass.h>
 #include <Analyzer/Passes/OptimizeGroupByFunctionKeysPass.h>
@@ -291,6 +292,7 @@ void addQueryTreePasses(QueryTreePassManager & manager, bool only_analyze)
     manager.addPass(std::make_unique<IfChainToMultiIfPass>());
     manager.addPass(std::make_unique<RewriteAggregateFunctionWithIfPass>());
     manager.addPass(std::make_unique<SumIfToCountIfPass>());
+    manager.addPass(std::make_unique<MultiIfConstFoldingPass>());
 
     manager.addPass(std::make_unique<ComparisonTupleEliminationPass>());
 
