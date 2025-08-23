@@ -1,4 +1,5 @@
 #include <optional>
+#include <Analyzer/ConstantNode.h>
 #include <Analyzer/IQueryTreeNode.h>
 #include <Analyzer/Passes/MultiIfConstFolding.h>
 
@@ -7,6 +8,8 @@
 #include <Analyzer/InDepthQueryTreeVisitor.h>
 #include <Analyzer/QueryNode.h>
 #include <Analyzer/Utils.h>
+#include <Core/ColumnWithTypeAndName.h>
+#include <Core/ColumnsWithTypeAndName.h>
 #include <Core/Settings.h>
 #include <Functions/FunctionFactory.h>
 #include <Functions/if.h>
@@ -36,7 +39,25 @@ public:
         if (!function_node)
             return;
 
-        enterMultiIf(node);
+        if (function_node->getFunctionName() == "multiIf")
+            enterMultiIf(node);
+        else if (function_node->getFunctionName() == "if")
+            enterIf(node);
+    }
+
+    void enterIf(QueryTreeNodePtr & node)
+    {
+        auto * function_node = node->as<FunctionNode>();
+        if (!function_node || function_node->getFunctionName() != "if" || function_node->getArguments().getNodes().size() != 3)
+            return;
+
+        const auto & arguments_nodes = function_node->getArguments().getNodes();
+
+        auto constant_condition = tryGetConstConditionFromNode(arguments_nodes[0]);
+        if (!constant_condition.has_value())
+            return;
+
+        node = *constant_condition ? arguments_nodes[1] : arguments_nodes[2];
     }
 
     void enterMultiIf(QueryTreeNodePtr & node)
@@ -45,7 +66,7 @@ public:
         if (!function_node || function_node->getFunctionName() != "multiIf")
             return;
 
-        auto & multi_if_function_arguments = function_node->getArguments().getNodes();
+        const auto & multi_if_function_arguments = function_node->getArguments().getNodes();
 
         if ((multi_if_function_arguments.size() % 2 == 0) || multi_if_function_arguments.size() < 3)
             return;
@@ -56,7 +77,7 @@ public:
         for (; result_argument_index < multi_if_function_arguments.size(); condition_argument_index += 2, result_argument_index += 2)
         {
             auto condition_node = multi_if_function_arguments[condition_argument_index];
-            auto constant_condition = tryGetConstConditionFromColumn(condition_node);
+            auto constant_condition = tryGetConstConditionFromNode(condition_node);
 
             if (!constant_condition.has_value())
                 return;
@@ -64,27 +85,81 @@ public:
             if (!*constant_condition)
                 continue;
 
-            auto argument_node = multi_if_function_arguments[result_argument_index];
-
-            if (!node->getResultType()->equals(*argument_node->getResultType()))
-                return;
-
-            node = argument_node;
+            node = multi_if_function_arguments[result_argument_index];
             return;
         }
 
-        auto result_node = multi_if_function_arguments.back();
-        if (!node->getResultType()->equals(*result_node->getResultType()))
-            node = std::move(result_node);
+        node = multi_if_function_arguments.back();
     }
 
 private:
-    std::optional<bool> tryGetConstConditionFromColumn(QueryTreeNodePtr node)
+    std::optional<bool> tryGetConstConditionFromNode(QueryTreeNodePtr node)
     {
-        if (node->getNodeType() != QueryTreeNodeType::COLUMN)
+        if (node->getNodeType() == QueryTreeNodeType::CONSTANT)
+            return tryExtractConstantFromConditionNode(node);
+        else if (node->getNodeType() == QueryTreeNodeType::COLUMN)
+            return tryGetConstConditionFromColumn(node);
+        else if (node->getNodeType() == QueryTreeNodeType::FUNCTION)
+            return tryGetConstConditionFromFunction(node);
+        else
+            return {};
+    }
+    std::optional<bool> tryGetConstConditionFromFunction(QueryTreeNodePtr node)
+    {
+        static const std::unordered_set<std::string_view> allowed_functions{
+            "equals",
+            "notEquals",
+            "less",
+            "lessOrEquals",
+            "greater",
+            "greaterOrEquals",
+        };
+
+        const auto * function_node = node->as<FunctionNode>();
+
+        if (!function_node || (!allowed_functions.contains(function_node->getFunctionName()))
+            || function_node->getArguments().getNodes().size() != 2)
             return {};
 
-        const auto * column_node = node->as<ColumnNode>();
+        const auto & arguments_nodes = function_node->getArguments().getNodes();
+
+        auto lhs_node = tryGetConstNode(arguments_nodes[0]);
+        auto rhs_node = tryGetConstNode(arguments_nodes[1]);
+
+        if (!lhs_node || !rhs_node)
+            return {};
+
+        auto * lhs_constant_node = lhs_node->as<ConstantNode>();
+        auto * rhs_constant_node = rhs_node->as<ConstantNode>();
+
+        chassert(lhs_constant_node);
+        chassert(rhs_constant_node);
+
+        ColumnsWithTypeAndName const_arguments = {
+            {lhs_constant_node->getColumn(),
+             lhs_constant_node->getValueNameAndType().second,
+             lhs_constant_node->getValueNameAndType().first},
+            {rhs_constant_node->getColumn(),
+             rhs_constant_node->getValueNameAndType().second,
+             rhs_constant_node->getValueNameAndType().first},
+        };
+
+        auto equal_function = FunctionFactory::instance().get(function_node->getFunctionName(), getContext())->build(const_arguments);
+        auto res_column
+            = equal_function->execute(const_arguments, function_node->getResultType(), /* input_rows_count */ 1, /* dry_run */ false);
+
+        if (!res_column || !res_column->isNumeric())
+            return {};
+
+        return res_column->getBool(0);
+    }
+    std::optional<bool> tryGetConstConditionFromColumn(QueryTreeNodePtr node)
+    {
+        return tryExtractConstantFromConditionNode(tryGetConstNodeFromColumn(node));
+    }
+    QueryTreeNodePtr tryGetConstNodeFromColumn(QueryTreeNodePtr node)
+    {
+        auto * column_node = node->as<ColumnNode>();
 
         if (!column_node)
             return {};
@@ -111,11 +186,16 @@ private:
 
             column_projection_node = projections.at(i);
         }
-
-        if (!column_projection_node)
-            return {};
-
-        return tryExtractConstantFromConditionNode(column_projection_node);
+        return column_projection_node;
+    }
+    QueryTreeNodePtr tryGetConstNode(QueryTreeNodePtr node)
+    {
+        if (node->getNodeType() == QueryTreeNodeType::CONSTANT)
+            return node;
+        else if (node->getNodeType() == QueryTreeNodeType::COLUMN)
+            return tryGetConstNodeFromColumn(node);
+        else
+            return nullptr;
     }
 };
 
