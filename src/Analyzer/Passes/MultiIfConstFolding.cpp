@@ -45,6 +45,7 @@ public:
             enterIf(node);
     }
 
+private:
     void enterIf(QueryTreeNodePtr & node)
     {
         auto * function_node = node->as<FunctionNode>();
@@ -92,66 +93,14 @@ public:
         node = multi_if_function_arguments.back();
     }
 
-private:
     std::optional<bool> tryGetConstConditionFromNode(QueryTreeNodePtr node)
     {
         if (node->getNodeType() == QueryTreeNodeType::CONSTANT)
             return tryExtractConstantFromConditionNode(node);
         else if (node->getNodeType() == QueryTreeNodeType::COLUMN)
             return tryGetConstConditionFromColumn(node);
-        else if (node->getNodeType() == QueryTreeNodeType::FUNCTION)
-            return tryGetConstConditionFromFunction(node);
         else
             return {};
-    }
-    std::optional<bool> tryGetConstConditionFromFunction(QueryTreeNodePtr node)
-    {
-        static const std::unordered_set<std::string_view> allowed_functions{
-            "equals",
-            "notEquals",
-            "less",
-            "lessOrEquals",
-            "greater",
-            "greaterOrEquals",
-        };
-
-        const auto * function_node = node->as<FunctionNode>();
-
-        if (!function_node || (!allowed_functions.contains(function_node->getFunctionName()))
-            || function_node->getArguments().getNodes().size() != 2)
-            return {};
-
-        const auto & arguments_nodes = function_node->getArguments().getNodes();
-
-        auto lhs_node = tryGetConstNode(arguments_nodes[0]);
-        auto rhs_node = tryGetConstNode(arguments_nodes[1]);
-
-        if (!lhs_node || !rhs_node)
-            return {};
-
-        auto * lhs_constant_node = lhs_node->as<ConstantNode>();
-        auto * rhs_constant_node = rhs_node->as<ConstantNode>();
-
-        chassert(lhs_constant_node);
-        chassert(rhs_constant_node);
-
-        ColumnsWithTypeAndName const_arguments = {
-            {lhs_constant_node->getColumn(),
-             lhs_constant_node->getValueNameAndType().second,
-             lhs_constant_node->getValueNameAndType().first},
-            {rhs_constant_node->getColumn(),
-             rhs_constant_node->getValueNameAndType().second,
-             rhs_constant_node->getValueNameAndType().first},
-        };
-
-        auto equal_function = FunctionFactory::instance().get(function_node->getFunctionName(), getContext())->build(const_arguments);
-        auto res_column
-            = equal_function->execute(const_arguments, function_node->getResultType(), /* input_rows_count */ 1, /* dry_run */ false);
-
-        if (!res_column || !res_column->isNumeric())
-            return {};
-
-        return res_column->getBool(0);
     }
     std::optional<bool> tryGetConstConditionFromColumn(QueryTreeNodePtr node)
     {
@@ -187,15 +136,6 @@ private:
             column_projection_node = projections.at(i);
         }
         return column_projection_node;
-    }
-    QueryTreeNodePtr tryGetConstNode(QueryTreeNodePtr node)
-    {
-        if (node->getNodeType() == QueryTreeNodeType::CONSTANT)
-            return node;
-        else if (node->getNodeType() == QueryTreeNodeType::COLUMN)
-            return tryGetConstNodeFromColumn(node);
-        else
-            return nullptr;
     }
 };
 

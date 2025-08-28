@@ -4,11 +4,11 @@
 
 #include <Common/Exception.h>
 
-#include <IO/WriteHelpers.h>
 #include <IO/Operators.h>
+#include <IO/WriteHelpers.h>
 
-#include <DataTypes/IDataType.h>
 #include <DataTypes/DataTypeLowCardinality.h>
+#include <DataTypes/IDataType.h>
 
 #include <Interpreters/Context.h>
 
@@ -25,14 +25,15 @@
 #include <Analyzer/Passes/CountDistinctPass.h>
 #include <Analyzer/Passes/CrossToInnerJoinPass.h>
 #include <Analyzer/Passes/FunctionToSubcolumnsPass.h>
+#include <Analyzer/Passes/FunctionsConstantFolding.h>
 #include <Analyzer/Passes/FuseFunctionsPass.h>
 #include <Analyzer/Passes/GroupingFunctionsResolvePass.h>
 #include <Analyzer/Passes/IfChainToMultiIfPass.h>
 #include <Analyzer/Passes/IfConstantConditionPass.h>
 #include <Analyzer/Passes/IfTransformStringsToEnumPass.h>
 #include <Analyzer/Passes/LogicalExpressionOptimizerPass.h>
-#include <Analyzer/Passes/MultiIfToIfPass.h>
 #include <Analyzer/Passes/MultiIfConstFolding.h>
+#include <Analyzer/Passes/MultiIfToIfPass.h>
 #include <Analyzer/Passes/NormalizeCountVariantsPass.h>
 #include <Analyzer/Passes/OptimizeDateOrDateTimeConverterWithPreimagePass.h>
 #include <Analyzer/Passes/OptimizeGroupByFunctionKeysPass.h>
@@ -56,8 +57,8 @@ namespace DB
 
 namespace ErrorCodes
 {
-    extern const int BAD_ARGUMENTS;
-    extern const int LOGICAL_ERROR;
+extern const int BAD_ARGUMENTS;
+extern const int LOGICAL_ERROR;
 }
 
 namespace
@@ -73,7 +74,8 @@ class ValidationChecker : public InDepthQueryTreeVisitor<ValidationChecker>
 public:
     explicit ValidationChecker(String pass_name_)
         : pass_name(std::move(pass_name_))
-    {}
+    {
+    }
 
     static bool needChildVisit(VisitQueryTreeNodeType & parent, VisitQueryTreeNodeType &)
     {
@@ -90,21 +92,27 @@ public:
         else if (auto * function = node->as<FunctionNode>())
             visitFunction(function);
     }
+
 private:
     void visitColumn(ColumnNode * column) const
     {
         if (column->getColumnSourceOrNull() == nullptr && column->getColumnName() != "__grouping_set")
-            throw Exception(ErrorCodes::LOGICAL_ERROR,
+            throw Exception(
+                ErrorCodes::LOGICAL_ERROR,
                 "Column {} {} query tree node does not have valid source node after running {} pass",
-                column->getColumnName(), column->getColumnType(), pass_name);
+                column->getColumnName(),
+                column->getColumnType(),
+                pass_name);
     }
 
     void visitFunction(FunctionNode * function) const
     {
         if (!function->isResolved())
-            throw Exception(ErrorCodes::LOGICAL_ERROR,
+            throw Exception(
+                ErrorCodes::LOGICAL_ERROR,
                 "Function {} is not resolved after running {} pass",
-                function->toAST()->formatForErrorMessage(), pass_name);
+                function->toAST()->formatForErrorMessage(),
+                pass_name);
 
         if (isNameOfInFunction(function->getFunctionName()))
             return;
@@ -117,7 +125,8 @@ private:
         auto actual_argument_columns = function->getArgumentColumns();
 
         if (expected_argument_types_size != actual_argument_columns.size())
-            throw Exception(ErrorCodes::LOGICAL_ERROR,
+            throw Exception(
+                ErrorCodes::LOGICAL_ERROR,
                 "Function {} expects {} arguments but has {} after running {} pass",
                 function->toAST()->formatForErrorMessage(),
                 expected_argument_types_size,
@@ -130,14 +139,16 @@ private:
             const auto & actual_argument_type = actual_argument_columns[i].type;
 
             if (!expected_argument_type)
-                throw Exception(ErrorCodes::LOGICAL_ERROR,
+                throw Exception(
+                    ErrorCodes::LOGICAL_ERROR,
                     "Function {} expected argument {} type is not set after running {} pass",
                     function->toAST()->formatForErrorMessage(),
                     i + 1,
                     pass_name);
 
             if (!actual_argument_type)
-                throw Exception(ErrorCodes::LOGICAL_ERROR,
+                throw Exception(
+                    ErrorCodes::LOGICAL_ERROR,
                     "Function {} actual argument {} type is not set after running {} pass",
                     function->toAST()->formatForErrorMessage(),
                     i + 1,
@@ -146,11 +157,12 @@ private:
             if (!expected_argument_type->equals(*actual_argument_type))
             {
                 /// Aggregate functions remove low cardinality for their argument types
-                if ((function->isAggregateFunction() || function->isWindowFunction()) &&
-                    expected_argument_type->equals(*recursiveRemoveLowCardinality(actual_argument_type)))
+                if ((function->isAggregateFunction() || function->isWindowFunction())
+                    && expected_argument_type->equals(*recursiveRemoveLowCardinality(actual_argument_type)))
                     continue;
 
-                throw Exception(ErrorCodes::LOGICAL_ERROR,
+                throw Exception(
+                    ErrorCodes::LOGICAL_ERROR,
                     "Function {} expects argument {} to have {} type but receives {} after running {} pass",
                     function->toAST()->formatForErrorMessage(),
                     i + 1,
@@ -172,7 +184,10 @@ private:
   * TODO: Add optimizations based on function semantics. Example: SELECT * FROM test_table WHERE id != id. (id is not nullable column).
   */
 
-QueryTreePassManager::QueryTreePassManager(ContextPtr context_) : WithContext(context_) {}
+QueryTreePassManager::QueryTreePassManager(ContextPtr context_)
+    : WithContext(context_)
+{
+}
 
 void QueryTreePassManager::addPass(QueryTreePassPtr pass)
 {
@@ -200,17 +215,15 @@ void QueryTreePassManager::runOnlyResolve(QueryTreeNodePtr query_tree_node)
     // 2. GroupingFunctionsResolvePass
     // 3. AutoFinalOnQueryPass
     // 4. RemoveUnusedProjectionColumnsPass
-    run(query_tree_node, 4);
+    run(query_tree_node, 6);
 }
 
 void QueryTreePassManager::run(QueryTreeNodePtr query_tree_node, size_t up_to_pass_index)
 {
     size_t passes_size = passes.size();
     if (up_to_pass_index > passes_size)
-        throw Exception(ErrorCodes::BAD_ARGUMENTS,
-            "Requested to run passes up to {} pass. There are only {} passes",
-            up_to_pass_index,
-            passes_size);
+        throw Exception(
+            ErrorCodes::BAD_ARGUMENTS, "Requested to run passes up to {} pass. There are only {} passes", up_to_pass_index, passes_size);
 
     auto current_context = getContext();
     for (size_t i = 0; i < up_to_pass_index; ++i)
@@ -239,10 +252,8 @@ void QueryTreePassManager::dump(WriteBuffer & buffer, size_t up_to_pass_index)
 {
     size_t passes_size = passes.size();
     if (up_to_pass_index > passes_size)
-        throw Exception(ErrorCodes::BAD_ARGUMENTS,
-            "Requested to dump passes up to {} pass. There are only {} passes",
-            up_to_pass_index,
-            passes_size);
+        throw Exception(
+            ErrorCodes::BAD_ARGUMENTS, "Requested to dump passes up to {} pass. There are only {} passes", up_to_pass_index, passes_size);
 
     for (size_t i = 0; i < up_to_pass_index; ++i)
     {
@@ -256,6 +267,8 @@ void QueryTreePassManager::dump(WriteBuffer & buffer, size_t up_to_pass_index)
 void addQueryTreePasses(QueryTreePassManager & manager, bool only_analyze)
 {
     manager.addPass(std::make_unique<QueryAnalysisPass>(only_analyze));
+    manager.addPass(std::make_unique<MultiIfConstFoldingPass>());
+    manager.addPass(std::make_unique<FunctionsConstantFoldingPass>());
     manager.addPass(std::make_unique<GroupingFunctionsResolvePass>());
     manager.addPass(std::make_unique<AutoFinalOnQueryPass>());
     /// This pass should be run for the secondary queries
